@@ -1,0 +1,3 @@
+.DOCKER
+*.swp
+__pycache__
