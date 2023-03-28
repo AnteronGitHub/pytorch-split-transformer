@@ -9,7 +9,8 @@ docker_run_it := docker run --rm \
 
 .PHONY: run
 run: $(docker_built)
-	$(docker_run_it)
+	python $(py_main)
+#	$(docker_run_it)
 
 $(docker_built): Dockerfile
 	docker build . -t $(docker_image)
