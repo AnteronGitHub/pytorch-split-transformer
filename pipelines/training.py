@@ -15,14 +15,14 @@ def generate_square_subsequent_mask(sz: int) -> Tensor:
     """Generates an upper-triangular matrix of -inf, with zeros on diag."""
     return torch.triu(torch.ones(sz, sz) * float('-inf'), diagonal=1)
 
-def train(model: nn.Module,
-          train_data,
-          criterion,
-          optimizer,
-          scheduler,
-          bptt : int,
-          ntokens : int,
-          device : str = 'cpu') -> None:
+def train_epoch(model: nn.Module,
+                train_data,
+                criterion,
+                optimizer,
+                scheduler,
+                bptt : int,
+                ntokens : int,
+                device : str = 'cpu') -> None:
     r"""Trains the model with the given criterion
 
     Args:
@@ -79,5 +79,8 @@ def evaluate(model: nn.Module, eval_data: Tensor, criterion, bptt : int, ntokens
             output = model(data, src_mask)
             output_flat = output.view(-1, ntokens)
             total_loss += seq_len * criterion(output_flat, targets).item()
-    return total_loss / (len(eval_data) - 1)
+    val_loss = total_loss / (len(eval_data) - 1)
+    val_ppl = math.exp(val_loss)
+    print(f'| valid loss {val_loss:5.2f} | valid ppl {val_ppl:8.2f}')
+    return val_loss, val_ppl
 
