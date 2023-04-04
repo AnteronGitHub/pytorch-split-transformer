@@ -71,16 +71,18 @@ def evaluate(model: nn.Module, eval_data: Tensor, criterion, bptt : int, ntokens
     src_mask = generate_square_subsequent_mask(bptt).to(device)
     eval_data = eval_data.to(device)
     with torch.no_grad():
-        for i in range(0, eval_data.size(0) - 1, bptt):
-            data, targets = get_batch(eval_data, bptt, i)
-            seq_len = data.size(0)
-            if seq_len != bptt:
-                src_mask = src_mask[:seq_len, :seq_len]
-            output = model(data, src_mask)
-            output_flat = output.view(-1, ntokens)
-            total_loss += seq_len * criterion(output_flat, targets).item()
+        try:
+            for i in range(0, eval_data.size(0) - 1, bptt):
+                data, targets = get_batch(eval_data, bptt, i)
+                seq_len = data.size(0)
+                if seq_len != bptt:
+                    src_mask = src_mask[:seq_len, :seq_len]
+                output = model(data, src_mask)
+                output_flat = output.view(-1, ntokens)
+                total_loss += seq_len * criterion(output_flat, targets).item()
+        except KeyboardInterrupt:
+            pass
     val_loss = total_loss / (len(eval_data) - 1)
     val_ppl = math.exp(val_loss)
-    print(f'| valid loss {val_loss:5.2f} | valid ppl {val_ppl:8.2f}')
     return val_loss, val_ppl
 
