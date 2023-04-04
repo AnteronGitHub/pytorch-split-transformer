@@ -11,70 +11,15 @@ from torch.utils.data import dataset
 
 from models.transformer import TransformerModel
 
-def generate_square_subsequent_mask(sz: int) -> Tensor:
-    """Generates an upper-triangular matrix of -inf, with zeros on diag."""
-    return torch.triu(torch.ones(sz, sz) * float('-inf'), diagonal=1)
-
 from torchtext.datasets import WikiText2
 from torchtext.data.utils import get_tokenizer
 from torchtext.vocab import build_vocab_from_iterator
 
-train_iter = WikiText2(split='train')
-tokenizer = get_tokenizer('basic_english')
-vocab = build_vocab_from_iterator(map(tokenizer, train_iter), specials=['<unk>'])
-vocab.set_default_index(vocab['<unk>'])
-
-def data_process(raw_text_iter: dataset.IterableDataset) -> Tensor:
-    """Converts raw text into a flat Tensor."""
-    data = [torch.tensor(vocab(tokenizer(item)), dtype=torch.long) for item in raw_text_iter]
-    return torch.cat(tuple(filter(lambda t: t.numel() > 0, data)))
-
-# train_iter was "consumed" by the process of building the vocab,
-# so we have to create it again
-train_iter, val_iter, test_iter = WikiText2()
-train_data = data_process(train_iter)
-val_data = data_process(val_iter)
-test_data = data_process(test_iter)
+from datasets.wiki_text2 import prepare_wikitext_dataset, get_batch
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-def batchify(data: Tensor, bsz: int) -> Tensor:
-    """Divides the data into bsz separate sequences, removing extra elements
-    that wouldn't cleanly fit.
-
-    Args:
-        data: Tensor, shape [N]
-        bsz: int, batch size
-
-    Returns:
-        Tensor of shape [N // bsz, bsz]
-    """
-    seq_len = data.size(0) // bsz
-    data = data[:seq_len * bsz]
-    data = data.view(bsz, seq_len).t().contiguous()
-    return data.to(device)
-
-batch_size = 20
-eval_batch_size = 10
-train_data = batchify(train_data, batch_size)  # shape [seq_len, batch_size]
-val_data = batchify(val_data, eval_batch_size)
-test_data = batchify(test_data, eval_batch_size)
-
-bptt = 35
-def get_batch(source: Tensor, i: int) -> Tuple[Tensor, Tensor]:
-    """
-    Args:
-        source: Tensor, shape [full_seq_len, batch_size]
-        i: int
-
-    Returns:
-        tuple (data, target), where data has shape [seq_len, batch_size] and
-        target has shape [seq_len * batch_size]
-    """
-    seq_len = min(bptt, len(source) - 1 - i)
-    data = source[i:i+seq_len]
-    target = source[i+1:i+1+seq_len].reshape(-1)
-    return data, target
+vocab, train_data, val_data, test_data = prepare_wikitext_dataset(device=device)
 
 ntokens = len(vocab)  # size of vocabulary
 emsize = 200  # embedding dimension
@@ -82,17 +27,22 @@ d_hid = 200  # dimension of the feedforward network model in nn.TransformerEncod
 nlayers = 2  # number of nn.TransformerEncoderLayer in nn.TransformerEncoder
 nhead = 2  # number of heads in nn.MultiheadAttention
 dropout = 0.2  # dropout probability
+
 model = TransformerModel(ntokens, emsize, nhead, d_hid, nlayers, dropout).to(device)
 
 import copy
 import time
 
 criterion = nn.CrossEntropyLoss()
-lr = 5.0  # learning rate
+lr = 2.5  # learning rate
 optimizer = torch.optim.SGD(model.parameters(), lr=lr)
 scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1.0, gamma=0.95)
 
-def train(model: nn.Module) -> None:
+def generate_square_subsequent_mask(sz: int) -> Tensor:
+    """Generates an upper-triangular matrix of -inf, with zeros on diag."""
+    return torch.triu(torch.ones(sz, sz) * float('-inf'), diagonal=1)
+
+def train(model: nn.Module, bptt) -> None:
     model.train()  # turn on train mode
     total_loss = 0.
     log_interval = 10
@@ -101,7 +51,7 @@ def train(model: nn.Module) -> None:
 
     num_batches = len(train_data) // bptt
     for batch, i in enumerate(range(0, train_data.size(0) - 1, bptt)):
-        data, targets = get_batch(train_data, i)
+        data, targets = get_batch(train_data, bptt, i)
         seq_len = data.size(0)
         if seq_len != bptt:  # only on last batch
             src_mask = src_mask[:seq_len, :seq_len]
@@ -125,13 +75,13 @@ def train(model: nn.Module) -> None:
             total_loss = 0
             start_time = time.time()
 
-def evaluate(model: nn.Module, eval_data: Tensor) -> float:
+def evaluate(model: nn.Module, eval_data: Tensor, bptt) -> float:
     model.eval()  # turn on evaluation mode
     total_loss = 0.
     src_mask = generate_square_subsequent_mask(bptt).to(device)
     with torch.no_grad():
         for i in range(0, eval_data.size(0) - 1, bptt):
-            data, targets = get_batch(eval_data, i)
+            data, targets = get_batch(eval_data, bptt, i)
             seq_len = data.size(0)
             if seq_len != bptt:
                 src_mask = src_mask[:seq_len, :seq_len]
@@ -141,7 +91,8 @@ def evaluate(model: nn.Module, eval_data: Tensor) -> float:
     return total_loss / (len(eval_data) - 1)
 
 best_val_loss = float('inf')
-epochs = 3
+epochs = 1
+bptt = 35
 
 with TemporaryDirectory() as tempdir:
     best_model_params_path = os.path.join(tempdir, "best_model_params.pt")
@@ -149,8 +100,11 @@ with TemporaryDirectory() as tempdir:
     for epoch in range(1, epochs + 1):
         epoch_start_time = time.time()
         print("Starting the training")
-        train(model)
-        val_loss = evaluate(model, val_data)
+        print('-' * 89)
+        train(model, bptt)
+        print('-' * 89)
+        print("Evaluating the model")
+        val_loss = evaluate(model, val_data, bptt)
         val_ppl = math.exp(val_loss)
         elapsed = time.time() - epoch_start_time
         print('-' * 89)
@@ -159,13 +113,14 @@ with TemporaryDirectory() as tempdir:
         print('-' * 89)
 
         if val_loss < best_val_loss:
+            print("Saving the trained model")
             best_val_loss = val_loss
             torch.save(model.state_dict(), best_model_params_path)
 
         scheduler.step()
     model.load_state_dict(torch.load(best_model_params_path)) # load best model states
 
-test_loss = evaluate(model, test_data)
+test_loss = evaluate(model, test_data, bptt)
 test_ppl = math.exp(test_loss)
 print('=' * 89)
 print(f'| End of training | test loss {test_loss:5.2f} | '
