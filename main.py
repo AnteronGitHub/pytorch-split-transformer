@@ -95,7 +95,7 @@ scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1.0, gamma=0.95)
 def train(model: nn.Module) -> None:
     model.train()  # turn on train mode
     total_loss = 0.
-    log_interval = 200
+    log_interval = 10
     start_time = time.time()
     src_mask = generate_square_subsequent_mask(bptt).to(device)
 
@@ -148,6 +148,7 @@ with TemporaryDirectory() as tempdir:
 
     for epoch in range(1, epochs + 1):
         epoch_start_time = time.time()
+        print("Starting the training")
         train(model)
         val_loss = evaluate(model, val_data)
         val_ppl = math.exp(val_loss)
